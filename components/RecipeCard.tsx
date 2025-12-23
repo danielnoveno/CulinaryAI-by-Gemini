@@ -51,7 +51,7 @@ const RecipeCard: React.FC<RecipeCardProps> = ({ recipe, onSelect, isFavorite, o
         <h3 className="text-lg font-bold text-slate-800 line-clamp-1 group-hover:text-orange-600 transition-colors">{recipe.title}</h3>
         
         {/* Macros Section */}
-        <div className="flex gap-4 mt-2 mb-3">
+        <div className="flex gap-4 mt-2 mb-4">
           <div className="flex flex-col">
             <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">Protein</span>
             <span className="text-xs font-bold text-slate-700">{recipe.nutrition?.protein || 0}g</span>
@@ -67,25 +67,29 @@ const RecipeCard: React.FC<RecipeCardProps> = ({ recipe, onSelect, isFavorite, o
         </div>
 
         {/* Enhanced Ingredient Preview Section */}
-        <div className="mt-1 flex flex-wrap gap-2 h-16 overflow-hidden content-start">
+        <div className="flex flex-wrap gap-1.5 h-16 overflow-hidden content-start">
           {recipe.ingredients.slice(0, 4).map((ing, i) => (
             <div 
               key={i} 
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition-all text-[11px] ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all text-[10px] ${
                 ing.owned 
-                ? 'bg-green-50 text-green-700 border-green-100' 
-                : 'bg-slate-50 text-slate-500 border-slate-100'
+                ? 'bg-green-50 text-green-700 border-green-200' 
+                : 'bg-slate-50 text-slate-600 border-slate-200'
               }`}
             >
               {ing.owned && (
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-2.5 w-2.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
               )}
-              <span className="font-black whitespace-nowrap opacity-80">{ing.amount}</span>
-              <span className="truncate max-w-[70px] font-medium">{ing.name}</span>
+              <div className="flex items-center gap-1">
+                <span className={`font-black uppercase tracking-tight ${ing.owned ? 'text-green-800' : 'text-slate-800'}`}>
+                  {ing.amount}
+                </span>
+                <span className="truncate max-w-[90px] font-medium opacity-80">{ing.name}</span>
+              </div>
             </div>
           ))}
           {recipe.ingredients.length > 4 && (
-            <div className="flex items-center text-[10px] text-slate-400 font-bold bg-slate-50/50 px-2 rounded-lg border border-transparent">
+            <div className="flex items-center text-[9px] text-slate-400 font-bold bg-white px-2 py-1 rounded-full border border-slate-200">
               +{recipe.ingredients.length - 4} MORE
             </div>
           )}

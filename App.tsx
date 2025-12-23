@@ -12,9 +12,13 @@ import { t } from './translations';
 
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>(() => {
-    const savedFavs = localStorage.getItem('culinary-favs');
-    const savedShopping = localStorage.getItem('culinary-shopping');
-    const savedLang = localStorage.getItem('culinary-lang') as Language;
+    // @ts-ignore
+    const savedFavs = typeof localStorage !== 'undefined' ? localStorage.getItem('culinary-favs') : null;
+    // @ts-ignore
+    const savedShopping = typeof localStorage !== 'undefined' ? localStorage.getItem('culinary-shopping') : null;
+    // @ts-ignore
+    const savedLang = typeof localStorage !== 'undefined' ? localStorage.getItem('culinary-lang') as Language : 'en';
+    
     return {
       language: savedLang || 'en',
       detectedIngredients: [],
@@ -33,6 +37,29 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [view, setView] = useState<'home' | 'recipes' | 'shopping' | 'favorites'>('home');
   const [searchQuery, setSearchQuery] = useState('');
+  const [hasApiKey, setHasApiKey] = useState(true);
+
+  // Check for API Key on mount
+  useEffect(() => {
+    const checkKey = async () => {
+      // @ts-ignore
+      if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
+        // @ts-ignore
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        setHasApiKey(hasKey);
+      }
+    };
+    checkKey();
+  }, []);
+
+  const handleOpenKeySelection = async () => {
+    // @ts-ignore
+    if (window.aistudio && typeof window.aistudio.openSelectKey === 'function') {
+      // @ts-ignore
+      await window.aistudio.openSelectKey();
+      setHasApiKey(true); // Assume success to unblock UI
+    }
+  };
 
   useEffect(() => {
     localStorage.setItem('culinary-favs', JSON.stringify(state.favorites));
@@ -62,9 +89,9 @@ const App: React.FC = () => {
       }));
       setView('recipes');
 
-      // Async AI Image Generation to replace placeholders
-      data.recipes.forEach(async (recipe: Recipe & { imagePrompt: string }) => {
-        const aiImageUrl = await generateRecipeImage(recipe.imagePrompt);
+      // Async Image Generation
+      data.recipes.forEach(async (recipe: any) => {
+        const aiImageUrl = await generateRecipeImage(recipe.imagePrompt, recipe.id);
         if (aiImageUrl) {
           setState(prev => ({
             ...prev,
@@ -73,9 +100,13 @@ const App: React.FC = () => {
         }
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to analyze fridge:", error);
-      alert("Failed to analyze fridge image.");
+      if (error?.message?.includes("entity was not found")) {
+        setHasApiKey(false);
+      } else {
+        alert("Error analyzing fridge. Please check your connection or API Key.");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -85,37 +116,6 @@ const App: React.FC = () => {
     if (!state.shoppingList.includes(item)) {
       setState(prev => ({ ...prev, shoppingList: [...prev.shoppingList, item] }));
     }
-  };
-
-  const removeFromShoppingList = (index: number) => {
-    setState(prev => ({
-      ...prev,
-      shoppingList: prev.shoppingList.filter((_, i) => i !== index)
-    }));
-  };
-
-  const clearShoppingList = () => {
-    setState(prev => ({ ...prev, shoppingList: [] }));
-  };
-
-  const clearFavorites = () => {
-    if (window.confirm(t(state.language, 'confirmClearFavs'))) {
-      setState(prev => ({ ...prev, favorites: [] }));
-    }
-  };
-
-  const handleDietaryChange = (diet: DietaryRestriction) => {
-    setState(prev => ({
-      ...prev,
-      filters: { ...prev.filters, dietary: [diet] }
-    }));
-  };
-
-  const handleMaxPrepTimeChange = (time: number) => {
-    setState(prev => ({
-      ...prev,
-      filters: { ...prev.filters, maxPrepTime: time }
-    }));
   };
 
   const toggleFavorite = (e: React.MouseEvent, recipe: Recipe) => {
@@ -130,8 +130,6 @@ const App: React.FC = () => {
     });
   };
 
-  const isFavorite = (id: string) => state.favorites.some(f => f.id === id);
-
   const getNumericPrepTime = (timeStr: string): number => {
     const match = timeStr.match(/(\d+)/);
     return match ? parseInt(match[1]) : 0;
@@ -139,18 +137,48 @@ const App: React.FC = () => {
 
   const filteredRecipes = (view === 'favorites' ? state.favorites : state.recipes).filter(r => {
     const terms = searchQuery.toLowerCase().split(/[,|\s]+/).map(t => t.trim()).filter(t => t.length > 0);
-    if (terms.length === 0) {
-      return state.filters.maxPrepTime === 120 || getNumericPrepTime(r.prepTime) <= state.filters.maxPrepTime;
-    }
-    const matchesSearch = terms.every(term => {
-      return r.title.toLowerCase().includes(term) || r.ingredients.some(ing => ing.name.toLowerCase().includes(term));
-    });
     const passesPrepTimeFilter = state.filters.maxPrepTime === 120 || getNumericPrepTime(r.prepTime) <= state.filters.maxPrepTime;
+    
+    if (terms.length === 0) return passesPrepTimeFilter;
+    
+    const matchesSearch = terms.every(term => 
+      r.title.toLowerCase().includes(term) || r.ingredients.some(ing => ing.name.toLowerCase().includes(term))
+    );
+    
     return matchesSearch && passesPrepTimeFilter;
   });
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20">
+      {/* API Key Selection Overlay */}
+      {!hasApiKey && (
+        <div className="fixed inset-0 z-[100] bg-slate-900/90 backdrop-blur-xl flex items-center justify-center p-6">
+          <div className="max-w-md w-full bg-white rounded-[2.5rem] p-10 text-center shadow-2xl animate-in zoom-in-95 duration-300">
+            <div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-6">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-orange-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+            </div>
+            <h2 className="text-2xl font-black text-slate-800 mb-4">{t(state.language, 'selectKeyTitle')}</h2>
+            <p className="text-slate-500 mb-8 leading-relaxed">{t(state.language, 'selectKeyDesc')}</p>
+            <div className="space-y-4">
+              <button 
+                onClick={handleOpenKeySelection}
+                className="w-full py-4 bg-orange-500 text-white rounded-2xl font-bold text-lg shadow-lg shadow-orange-200 hover:bg-orange-600 transition-all active:scale-95"
+              >
+                {t(state.language, 'selectKeyButton')}
+              </button>
+              <a 
+                href="https://ai.google.dev/gemini-api/docs/billing" 
+                target="_blank" 
+                rel="noreferrer"
+                className="block text-sm text-slate-400 font-medium hover:text-orange-500 transition-colors"
+              >
+                {t(state.language, 'billingDoc')}
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-slate-100">
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
           <div className="flex items-center gap-3 cursor-pointer" onClick={() => { setView('home'); setState(prev => ({ ...prev, activeRecipe: null })); }}>
@@ -207,7 +235,7 @@ const App: React.FC = () => {
                 {filteredRecipes.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                     {filteredRecipes.map((recipe) => (
-                      <RecipeCard key={recipe.id} recipe={recipe} isFavorite={isFavorite(recipe.id)} onToggleFavorite={toggleFavorite} onSelect={(r) => setState(prev => ({ ...prev, activeRecipe: r }))} />
+                      <RecipeCard key={recipe.id} recipe={recipe} isFavorite={state.favorites.some(f => f.id === recipe.id)} onToggleFavorite={toggleFavorite} onSelect={(r) => setState(prev => ({ ...prev, activeRecipe: r }))} />
                     ))}
                   </div>
                 ) : (
@@ -233,7 +261,7 @@ const App: React.FC = () => {
 
             {view === 'shopping' && (
               <div className="max-w-2xl mx-auto">
-                <ShoppingList language={state.language} items={state.shoppingList} onRemove={removeFromShoppingList} onClear={clearShoppingList} />
+                <ShoppingList language={state.language} items={state.shoppingList} onRemove={(idx) => setState(prev => ({ ...prev, shoppingList: prev.shoppingList.filter((_, i) => i !== idx) }))} onClear={() => setState(prev => ({ ...prev, shoppingList: [] }))} />
               </div>
             )}
           </div>
@@ -243,22 +271,12 @@ const App: React.FC = () => {
               language={state.language}
               onLanguageChange={handleLanguageChange}
               selectedDiet={state.filters.dietary[0] as DietaryRestriction} 
-              onSelectDiet={handleDietaryChange} 
+              onSelectDiet={(diet) => setState(prev => ({ ...prev, filters: { ...prev.filters, dietary: [diet] } }))} 
               maxPrepTime={state.filters.maxPrepTime}
-              onMaxPrepTimeChange={handleMaxPrepTimeChange}
+              onMaxPrepTimeChange={(time) => setState(prev => ({ ...prev, filters: { ...prev.filters, maxPrepTime: time } }))}
               detectedIngredients={state.detectedIngredients}
               activeRecipe={state.activeRecipe}
             />
-            {state.detectedIngredients.length > 0 && (
-              <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                <h3 className="text-lg font-bold text-slate-800 mb-4">{t(state.language, 'detectedItems')}</h3>
-                <div className="flex flex-wrap gap-2">
-                  {state.detectedIngredients.map((item, idx) => (
-                    <span key={idx} className="bg-orange-50 text-orange-600 px-3 py-1.5 rounded-xl text-sm font-medium">{item}</span>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </main>
@@ -266,23 +284,6 @@ const App: React.FC = () => {
       {state.isCooking && state.activeRecipe && (
         <CookingMode language={state.language} recipe={state.activeRecipe} onClose={() => setState(prev => ({ ...prev, isCooking: false }))} />
       )}
-
-      {/* Mobile Nav */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 bg-white/90 backdrop-blur-md border-t border-slate-100 flex items-center justify-around h-20 px-4 z-40">
-        <button onClick={() => setView('home')} className={`flex flex-col items-center gap-1 ${view === 'home' ? 'text-orange-500' : 'text-slate-400'}`}>
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-        </button>
-        <button onClick={() => { setView('recipes'); setState(prev => ({ ...prev, activeRecipe: null })); }} className={`flex flex-col items-center gap-1 ${view === 'recipes' ? 'text-orange-500' : 'text-slate-400'}`}>
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-        </button>
-        <button onClick={() => { setView('favorites'); setState(prev => ({ ...prev, activeRecipe: null })); }} className={`flex flex-col items-center gap-1 ${view === 'favorites' ? 'text-orange-500' : 'text-slate-400'}`}>
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l8.84-8.84 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-        </button>
-        <button onClick={() => setView('shopping')} className={`flex flex-col items-center gap-1 relative ${view === 'shopping' ? 'text-orange-500' : 'text-slate-400'}`}>
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
-          {state.shoppingList.length > 0 && <span className="absolute -top-1 right-0 w-4 h-4 bg-orange-500 text-white text-[10px] flex items-center justify-center rounded-full">{state.shoppingList.length}</span>}
-        </button>
-      </nav>
     </div>
   );
 };

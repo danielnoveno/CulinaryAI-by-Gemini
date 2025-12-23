@@ -3,30 +3,55 @@ import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { Recipe, Difficulty, Language } from "../types";
 
 /**
- * PENTING: Ganti URL ini dengan alamat folder API di hosting Anda.
- * Pastikan folder tersebut berisi file: get-recipes.php, save-recipes.php, dll.
+ * Fungsi pembantu untuk mendapatkan API Key secara aman dari environment.
  */
-const BACKEND_API_URL = "https://domain-anda.com/api-culinary"; 
-
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getSafeApiKey = () => {
+  try {
+    // @ts-ignore
+    return typeof process !== 'undefined' ? process.env.API_KEY : undefined;
+  } catch (e) {
+    return undefined;
+  }
+};
 
 /**
- * Fungsi utilitas untuk fetch ke PHP
+ * Konfigurasi Backend URL
+ */
+const getBackendUrl = () => {
+  try {
+    // @ts-ignore
+    return (typeof process !== 'undefined' && process.env.VITE_BACKEND_API_URL) || "http://localhost/api-culinary";
+  } catch (e) {
+    return "http://localhost/api-culinary";
+  }
+};
+
+/**
+ * Inisialisasi Google GenAI. 
+ * Kita membuat instance baru setiap kali fungsi dipanggil untuk memastikan
+ * kita menggunakan API Key paling baru (terutama setelah user memilih key via dialog).
+ */
+const createAIClient = () => {
+  const apiKey = getSafeApiKey();
+  return new GoogleGenAI({ apiKey: apiKey || "" });
+};
+
+/**
+ * Sinkronisasi Database
  */
 const syncWithDatabase = async (endpoint: string, method: "GET" | "POST", data?: any) => {
+  const url = getBackendUrl();
   try {
-    const response = await fetch(`${BACKEND_API_URL}${endpoint}`, {
+    const response = await fetch(`${url}${endpoint}`, {
       method,
-      headers: { 
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: data ? JSON.stringify(data) : undefined,
     });
     
     if (!response.ok) return null;
     return await response.json();
   } catch (error) {
-    console.warn("Backend Offline: Menggunakan mode langsung ke Gemini.");
+    console.warn("Backend Offline: Menggunakan mode Standalone AI.");
     return null;
   }
 };
@@ -37,22 +62,17 @@ export const analyzeFridgeAndSuggestRecipes = async (
   language: Language
 ): Promise<{ detectedIngredients: string[], recipes: Recipe[] }> => {
   
-  // Gunakan 100 karakter pertama base64 sebagai ID unik/hash sederhana
   const imageHash = btoa(base64Image.substring(0, 100)); 
-  
-  // 1. CEK DATABASE: Apakah foto kulkas ini sudah pernah di-scan?
   const cached = await syncWithDatabase("/get-recipes.php", "POST", { hash: imageHash });
-  if (cached && cached.success) {
-    return cached.data;
-  }
+  if (cached && cached.success) return cached.data;
 
-  const ai = getAI();
+  const ai = createAIClient();
   const langName = language === 'id' ? 'Indonesian' : 'English';
 
   const systemInstruction = `
-    You are a professional chef assistant. 
-    Analyze the fridge image and suggest 4 unique recipes.
-    Return strictly in JSON format. Language: ${langName}.
+    You are a professional Executive Chef. 
+    Analyze the image and suggest 4 unique recipes.
+    Return STRICT JSON. Language: ${langName}.
   `;
 
   const response = await ai.models.generateContent({
@@ -60,7 +80,7 @@ export const analyzeFridgeAndSuggestRecipes = async (
     contents: [{
       parts: [
         { inlineData: { data: base64Image, mimeType: "image/jpeg" } },
-        { text: "Identify ingredients and suggest recipes." }
+        { text: "Analyze fridge and suggest recipes in JSON." }
       ]
     }],
     config: {
@@ -118,28 +138,27 @@ export const analyzeFridgeAndSuggestRecipes = async (
   });
 
   const generatedData = JSON.parse(response.text || '{"detectedIngredients": [], "recipes": []}');
-
-  // 2. SIMPAN KE DATABASE: Simpan hasil generate agar user lain tidak perlu bayar API lagi
-  await syncWithDatabase("/save-recipes.php", "POST", { 
-    hash: imageHash, 
-    data: generatedData 
-  });
+  await syncWithDatabase("/save-recipes.php", "POST", { hash: imageHash, data: generatedData });
 
   return generatedData;
 };
 
 export const generateRecipeImage = async (prompt: string, recipeId?: string): Promise<string | null> => {
-  // 1. CEK DATABASE: Apakah gambar resep ini sudah ada?
   if (recipeId) {
     const cachedImg = await syncWithDatabase(`/get-image.php?id=${recipeId}`, "GET");
     if (cachedImg && cachedImg.url) return cachedImg.url;
   }
 
-  const ai = getAI();
+  const ai = createAIClient();
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
-      contents: { parts: [{ text: `Professional food photography of: ${prompt}` }] }
+      contents: { 
+        parts: [{ text: `Professional food photography of: ${prompt}` }] 
+      },
+      config: {
+        imageConfig: { aspectRatio: "16:9" }
+      }
     });
     
     let base64 = null;
@@ -150,13 +169,8 @@ export const generateRecipeImage = async (prompt: string, recipeId?: string): Pr
       }
     }
 
-    // 2. UPLOAD KE HOSTING: Kirim base64 ke PHP untuk disimpan jadi file .jpg
     if (base64 && recipeId) {
-      const uploadResult = await syncWithDatabase("/upload-image.php", "POST", { 
-        id: recipeId, 
-        image: base64 
-      });
-      return uploadResult?.url || base64;
+      await syncWithDatabase("/upload-image.php", "POST", { id: recipeId, image: base64 });
     }
 
     return base64;
@@ -166,17 +180,16 @@ export const generateRecipeImage = async (prompt: string, recipeId?: string): Pr
 };
 
 export const generateStepImage = async (stepText: string, stepId?: string): Promise<string | null> => {
-  // 1. CEK DATABASE
-  if (stepId) {
-    const cached = await syncWithDatabase(`/get-image.php?id=${stepId}`, "GET");
-    if (cached && cached.url) return cached.url;
-  }
-
-  const ai = getAI();
+  const ai = createAIClient();
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
-      contents: { parts: [{ text: `Cooking tutorial photo: ${stepText}` }] }
+      contents: { 
+        parts: [{ text: `Cooking tutorial photo: ${stepText}` }] 
+      },
+      config: {
+        imageConfig: { aspectRatio: "16:9" }
+      }
     });
     
     let base64 = null;
@@ -186,16 +199,6 @@ export const generateStepImage = async (stepText: string, stepId?: string): Prom
         break;
       }
     }
-
-    // 2. UPLOAD KE HOSTING
-    if (base64 && stepId) {
-       const uploadResult = await syncWithDatabase("/upload-image.php", "POST", { 
-         id: stepId, 
-         image: base64 
-       });
-       return uploadResult?.url || base64;
-    }
-
     return base64;
   } catch (error) {
     return null;
@@ -203,46 +206,41 @@ export const generateStepImage = async (stepText: string, stepId?: string): Prom
 };
 
 export const generateDynamicTips = async (ingredients: string[], recipeTitle: string | undefined, language: Language): Promise<{ title: string, content: string }[]> => {
-  const ai = getAI();
+  const ai = createAIClient();
   const langName = language === 'id' ? 'Indonesian' : 'English';
   
-  // Prompt yang lebih kaya untuk menghasilkan tips berkualitas tinggi
-  const prompt = `You are a 3-Michelin star Executive Chef. 
-  Context: User has these ingredients [${ingredients.join(", ")}] and is ${recipeTitle ? `cooking '${recipeTitle}'` : 'looking at their fridge'}.
-  Task: Provide 2 highly practical, advanced professional chef hacks (under 20 words each).
-  Topic focus: Flavor profiling, tool usage, or food science (e.g., Maillard reaction, emulsification).
-  Output: Strict JSON array of objects with 'title' and 'content' keys.
-  Language: ${langName}.`;
+  const prompt = `Advanced chef tips for ingredients: [${ingredients.join(", ")}]. JSON array with 'title' and 'content'. Language: ${langName}.`;
 
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      }
+      config: { responseMimeType: "application/json" }
     });
     return JSON.parse(response.text || "[]");
   } catch (error) {
-    console.error("AI Tips Error:", error);
     return [];
   }
 };
 
 export const speakStep = async (text: string, language: Language) => {
-  const ai = getAI();
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash-preview-tts",
-    contents: [{ parts: [{ text }] }],
-    config: {
-      responseModalities: [Modality.AUDIO],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName: 'Kore' },
+  const ai = createAIClient();
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-preview-tts",
+      contents: [{ parts: [{ text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: 'Kore' },
+          },
         },
       },
-    },
-  });
+    });
 
-  return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+  } catch (error) {
+    return null;
+  }
 };
